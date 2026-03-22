@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Flores amarillas para ti</title>
+	<style>
+		*{
+			box-sizing: border-box;
+			margin: 0;
+			padding: 0;
+		}
+
+		body{
+			background: #000;
+			min-height: 100vh;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			overflow: hidden;
+			font-family: Arial, sans-serif;
+		}
+
+		.wrapper{
+			position: relative;
+			width: min(96vw, 900px);
+			height: min(96vh, 900px);
+		}
+
+		canvas{
+			width: 100%;
+			height: 100%;
+			display: block;
+			background: #000;
+		}
+
+		.mensaje{
+			position: absolute;
+			top: 20px;
+			left: 50%;
+			transform: translateX(-50%);
+			color: #ffe082;
+			font-size: clamp(1rem, 2vw, 1.3rem);
+			font-weight: bold;
+			background: rgba(20,20,20,0.82);
+			padding: 14px 18px;
+			border-radius: 18px;
+			z-index: 2;
+			width: min(90vw, 320px);
+			text-align: center;
+			line-height: 1.6;
+			white-space: normal;
+			box-shadow: 0 0 18px rgba(255,224,130,0.12);
+		}
+	</style>
+</head>
+<body>
+	<div class="wrapper">
+		<div class="mensaje">"En tus ojos encuentro mi hogar, en tu sonrisa encuentro mi felicidad y en tu amor encuentro mi razón de ser" TE AMOO ANGY🥰💛</div>
+		<canvas id="canvas"></canvas>
+	</div>
+
+	<script>
+		const canvas = document.getElementById("canvas");
+		const ctx = canvas.getContext("2d");
+
+		let rawData = [];
+		let processedShapes = [];
+		let flowerGroups = [];
+
+		let currentFlowerIndex = 0;
+		let currentShapeIndex = 0;
+		let currentPointProgress = 0;
+		let pauseCounter = 0;
+
+		const pointsPerFrame = 140;
+		const pauseBetweenFlowers = 16;
+
+		/* =========================================================
+		   PARTÍCULAS / BRILLITOS
+		   ========================================================= */
+		const particles = [];
+		const particleCount = 45;
+
+		function createParticle(){
+			return {
+				x: Math.random() * canvas.width,
+				y: Math.random() * canvas.height,
+				size: Math.random() * 2.6 + 1,
+				speedY: Math.random() * 0.55 + 0.18,
+				speedX: (Math.random() - 0.5) * 0.35,
+				opacity: Math.random() * 0.45 + 0.18,
+				type: Math.random() > 0.5 ? "dot" : "spark"
+			};
+		}
+
+		function initParticles(){
+			particles.length = 0;
+
+			for(let i = 0; i < particleCount; i++){
+				particles.push(createParticle());
+			}
+		}
+
+		function updateParticles(){
+			for(const p of particles){
+				p.y -= p.speedY;
+				p.x += p.speedX;
+
+				if(p.y < -10){
+					p.y = canvas.height + 10;
+					p.x = Math.random() * canvas.width;
+				}
+
+				if(p.x < -10){
+					p.x = canvas.width + 10;
+				}
+
+				if(p.x > canvas.width + 10){
+					p.x = -10;
+				}
+			}
+		}
+
+		function drawParticles(){
+			for(const p of particles){
+				if(p.type === "dot"){
+					ctx.beginPath();
+					ctx.fillStyle = `rgba(255, 235, 140, ${p.opacity})`;
+					ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+					ctx.fill();
+				}else{
+					ctx.fillStyle = `rgba(255, 220, 90, ${p.opacity})`;
+					ctx.fillRect(p.x, p.y, p.size * 1.6, p.size * 1.6);
+				}
+			}
+		}
+
+		/* =========================================================
+		   CANVAS Y DIBUJO
+		   ========================================================= */
+		function resizeCanvas(){
+			const rect = canvas.getBoundingClientRect();
+			canvas.width = Math.floor(rect.width);
+			canvas.height = Math.floor(rect.height);
+		}
+
+		function getRgb(color){
+			if(!color || color.length < 3){
+				return { r: 255, g: 255, b: 255 };
+			}
+
+			let [r, g, b] = color;
+
+			if(r <= 1 && g <= 1 && b <= 1){
+				r = Math.round(r * 255);
+				g = Math.round(g * 255);
+				b = Math.round(b * 255);
+			}else{
+				r = Math.round(r);
+				g = Math.round(g);
+				b = Math.round(b);
+			}
+
+			r = Math.max(0, Math.min(255, r));
+			g = Math.max(0, Math.min(255, g));
+			b = Math.max(0, Math.min(255, b));
+
+			return { r, g, b };
+		}
+
+		function rgbToCss(rgb){
+			return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+		}
+
+		function getBrightness(rgb){
+			return (rgb.r + rgb.g + rgb.b) / 3;
+		}
+
+		function getGlobalBounds(data){
+			let minX = Infinity;
+			let minY = Infinity;
+			let maxX = -Infinity;
+			let maxY = -Infinity;
+
+			for(const item of data){
+				if(!item.contour || !item.contour.length) continue;
+
+				for(const point of item.contour){
+					const x = point[0];
+					const y = point[1];
+
+					if(x < minX) minX = x;
+					if(y < minY) minY = y;
+					if(x > maxX) maxX = x;
+					if(y > maxY) maxY = y;
+				}
+			}
+
+			return { minX, minY, maxX, maxY };
+		}
+
+		function prepareShapes(data){
+			const bounds = getGlobalBounds(data);
+
+			const drawingWidth = bounds.maxX - bounds.minX;
+			const drawingHeight = bounds.maxY - bounds.minY;
+
+			const paddingX = canvas.width * 0.05;
+			const paddingTop = canvas.height * 0.14;
+			const paddingBottom = canvas.height * 0.04;
+
+			const usableWidth = canvas.width - paddingX * 2;
+			const usableHeight = canvas.height - paddingTop - paddingBottom;
+
+			const scaleX = usableWidth / drawingWidth;
+			const scaleY = usableHeight / drawingHeight;
+			const scale = Math.min(scaleX, scaleY);
+
+			const finalWidth = drawingWidth * scale;
+			const finalHeight = drawingHeight * scale;
+
+			const offsetX = (canvas.width - finalWidth) / 2;
+			const offsetY = paddingTop + (usableHeight - finalHeight) / 2;
+
+			processedShapes = data
+				.filter(item => item.contour && item.contour.length)
+				.map(item => {
+					const rgb = getRgb(item.color);
+					const brightness = getBrightness(rgb);
+
+					const points = item.contour.map(point => ({
+						x: offsetX + (point[0] - bounds.minX) * scale,
+						y: offsetY + (point[1] - bounds.minY) * scale
+					}));
+
+					let centerX = 0;
+					let centerY = 0;
+
+					if(item.center && item.center.length >= 2){
+						centerX = offsetX + (item.center[0] - bounds.minX) * scale;
+						centerY = offsetY + (item.center[1] - bounds.minY) * scale;
+					}else{
+						let sumX = 0;
+						let sumY = 0;
+
+						for(const p of points){
+							sumX += p.x;
+							sumY += p.y;
+						}
+
+						centerX = points.length ? sumX / points.length : 0;
+						centerY = points.length ? sumY / points.length : 0;
+					}
+
+					return {
+						points,
+						color: rgbToCss(rgb),
+						brightness,
+						size: Math.max(1.1, scale * 1.05),
+						centerX,
+						centerY
+					};
+				})
+				.filter(shape => shape.brightness > 58);
+		}
+
+		function distanceSquared(a, b){
+			const dx = a.x - b.x;
+			const dy = a.y - b.y;
+			return dx * dx + dy * dy;
+		}
+
+		function groupIntoThreeFlowers(){
+			if(processedShapes.length === 0){
+				flowerGroups = [];
+				return;
+			}
+
+			const seeds = [
+				{ x: canvas.width * 0.25, y: canvas.height * 0.55 }, /* izquierda */
+				{ x: canvas.width * 0.61, y: canvas.height * 0.34 }, /* arriba */
+				{ x: canvas.width * 0.57, y: canvas.height * 0.73 }  /* abajo */
+			];
+
+			flowerGroups = [[], [], []];
+
+			for(const shape of processedShapes){
+				let bestIndex = 0;
+				let bestDist = Infinity;
+
+				for(let i = 0; i < seeds.length; i++){
+					const dist = distanceSquared(
+						{ x: shape.centerX, y: shape.centerY },
+						seeds[i]
+					);
+
+					if(dist < bestDist){
+						bestDist = dist;
+						bestIndex = i;
+					}
+				}
+
+				flowerGroups[bestIndex].push(shape);
+			}
+
+			for(const group of flowerGroups){
+				group.sort((a, b) => {
+					if(a.centerY !== b.centerY){
+						return a.centerY - b.centerY;
+					}
+					return a.centerX - b.centerX;
+				});
+			}
+		}
+
+		function drawBackground(){
+			ctx.fillStyle = "#000";
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
+		}
+
+		function clearCanvas(){
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+		}
+
+		function drawShape(shape, pointCount){
+			ctx.fillStyle = shape.color;
+			const visible = Math.min(pointCount, shape.points.length);
+
+			for(let i = 0; i < visible; i++){
+				const p = shape.points[i];
+				ctx.fillRect(p.x, p.y, shape.size, shape.size);
+			}
+		}
+
+		function drawGroupComplete(group){
+			for(const shape of group){
+				drawShape(shape, shape.points.length);
+			}
+		}
+
+		function render(){
+			clearCanvas();
+			drawBackground();
+
+			for(let i = 0; i < currentFlowerIndex; i++){
+				drawGroupComplete(flowerGroups[i]);
+			}
+
+			if(currentFlowerIndex < flowerGroups.length){
+				const group = flowerGroups[currentFlowerIndex];
+
+				for(let i = 0; i < currentShapeIndex; i++){
+					drawShape(group[i], group[i].points.length);
+				}
+
+				if(currentShapeIndex < group.length){
+					drawShape(group[currentShapeIndex], currentPointProgress);
+				}
+			}
+
+			drawParticles();
+		}
+
+		function animate(){
+			updateParticles();
+			render();
+
+			if(currentFlowerIndex >= flowerGroups.length){
+				requestAnimationFrame(animate);
+				return;
+			}
+
+			const group = flowerGroups[currentFlowerIndex];
+
+			if(currentShapeIndex < group.length){
+				const shape = group[currentShapeIndex];
+
+				if(currentPointProgress < shape.points.length){
+					currentPointProgress += pointsPerFrame;
+				}else{
+					currentShapeIndex++;
+					currentPointProgress = 0;
+				}
+			}else{
+				pauseCounter++;
+
+				if(pauseCounter >= pauseBetweenFlowers){
+					currentFlowerIndex++;
+					currentShapeIndex = 0;
+					currentPointProgress = 0;
+					pauseCounter = 0;
+				}
+			}
+
+			requestAnimationFrame(animate);
+		}
+
+		async function init(){
+			try{
+				resizeCanvas();
+				initParticles();
+
+				const response = await fetch("sunflowers.json");
+				rawData = await response.json();
+
+				prepareShapes(rawData);
+				groupIntoThreeFlowers();
+
+				currentFlowerIndex = 0;
+				currentShapeIndex = 0;
+				currentPointProgress = 0;
+				pauseCounter = 0;
+
+				animate();
+
+				window.addEventListener("resize", () => {
+					resizeCanvas();
+					initParticles();
+					prepareShapes(rawData);
+					groupIntoThreeFlowers();
+
+					currentFlowerIndex = 0;
+					currentShapeIndex = 0;
+					currentPointProgress = 0;
+					pauseCounter = 0;
+				});
+			}catch(error){
+				console.error("Error al cargar sunflowers.json:", error);
+				clearCanvas();
+				drawBackground();
+				ctx.fillStyle = "#fff";
+				ctx.font = "20px Arial";
+				ctx.fillText("No se pudo cargar sunflowers.json", 20, 40);
+			}
+		}
+
+		init();
+	</script>
+</body>
+</html>
